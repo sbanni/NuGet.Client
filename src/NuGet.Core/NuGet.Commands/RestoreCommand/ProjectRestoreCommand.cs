@@ -196,14 +196,30 @@ namespace NuGet.Commands
                     success = false;
                     foreach (var unresolved in graph.Unresolved)
                     {
-                        var packageDisplayName = DiagnosticUtility.FormatDependency(unresolved.Name, unresolved.VersionRange);
+                        RestoreLogMessage logMessage = null;
 
-                        var message = string.Format(CultureInfo.CurrentCulture,
-                            Strings.Log_UnresolvedDependency,
-                            packageDisplayName,
-                            graph.Name);
+                        if (unresolved.TypeConstraintAllows(LibraryDependencyTarget.Package))
+                        {
 
-                        _logger.Log(RestoreLogMessage.CreateError(NuGetLogCode.NU1101, message));
+                        }
+                        else if (unresolved.TypeConstraintAllowsAnyOf(LibraryDependencyTarget.Project)
+                            || unresolved.TypeConstraintAllowsAnyOf(LibraryDependencyTarget.ExternalProject))
+                        {
+
+                        }
+                        else
+                        {
+                            var packageDisplayName = DiagnosticUtility.FormatDependency(unresolved.Name, unresolved.VersionRange);
+
+                            var message = string.Format(CultureInfo.CurrentCulture,
+                                Strings.Log_UnresolvedDependency,
+                                packageDisplayName,
+                                graph.Name);
+
+                            logMessage = RestoreLogMessage.CreateError(NuGetLogCode.NU1101, message);
+                        }
+
+                        _logger.Log(logMessage);
                     }
                 }
             }

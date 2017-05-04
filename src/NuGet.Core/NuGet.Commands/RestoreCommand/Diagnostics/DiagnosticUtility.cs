@@ -1,6 +1,9 @@
 ﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
+using System;
+using System.Collections.Generic;
+using System.Text;
 using NuGet.LibraryModel;
 using NuGet.Versioning;
 
@@ -66,6 +69,33 @@ namespace NuGet.Commands
             {
                 return $"({graph.Framework.DotNetFrameworkName} RuntimeIdentifier: {graph.RuntimeIdentifier})";
             }
+        }
+
+        /// <summary>
+        /// Format a message as:
+        /// 
+        /// First line
+        ///   - second
+        ///   - third
+        /// </summary>
+        public static string GetMultiLineMessage(IEnumerable<string> lines)
+        {
+            var sb = new StringBuilder();
+
+            foreach (var line in lines)
+            {
+                if (sb.Length == 0)
+                {
+                    sb.Append(line);
+                }
+                else
+                {
+                    sb.Append(Environment.NewLine);
+                    sb.Append($"  - {line}");
+                }
+            }
+
+            return sb.ToString();
         }
     }
 }

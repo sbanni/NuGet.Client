@@ -50,6 +50,7 @@ namespace NuGet.Common
         /// Unable to resolve package
         /// TODO split this up into the following errors.
         /// </summary>
+        NU1100 = 1100,
         NU1101 = 1101,
         NU1102 = 1102,
         NU1103 = 1103,
