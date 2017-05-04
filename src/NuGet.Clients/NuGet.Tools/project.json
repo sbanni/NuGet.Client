@@ -1,8 +1,8 @@
 {
   "dependencies": {
     "Lucene.Net": "3.0.3",
-    "NuGet.Commands": "4.3.0-*",
-    "NuGet.Indexing": "4.3.0-*"
+    "NuGet.Commands": "4.3.0-beta2-*",
+    "NuGet.Indexing": "4.3.0-beta2-*"
   },
   "frameworks": {
     "net46": {}
