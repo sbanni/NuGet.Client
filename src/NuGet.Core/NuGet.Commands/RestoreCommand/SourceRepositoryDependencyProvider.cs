@@ -102,7 +102,7 @@ namespace NuGet.Commands
             await EnsureResource();
 
             // Discover all versions from the feed
-            var packageVersions = await GetPackageVersionsAsync(libraryRange.Name, cacheContext, logger, cancellationToken);
+            var packageVersions = await GetAllVersionsAsync(libraryRange.Name, cacheContext, logger, cancellationToken);
 
             // Select the best match
             var packageVersion = packageVersions?.FindBestMatch(libraryRange.VersionRange, version => version);

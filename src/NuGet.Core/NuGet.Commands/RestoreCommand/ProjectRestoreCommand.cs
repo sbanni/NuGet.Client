@@ -123,7 +123,7 @@ namespace NuGet.Commands
             // versions that have been bumped up unexpectedly.
             await UnexpectedDependencyMessages.LogAsync(graphs, _request.Project, _logger);
 
-            var success = ResolutionSucceeded(graphs);
+            var success = await ResolutionSucceeded(graphs, context, token);
 
             return Tuple.Create(success, graphs, allRuntimes);
         }
@@ -169,7 +169,7 @@ namespace NuGet.Commands
             return RestoreTargetGraph.Create(runtimeGraph, graphs, context, _logger, framework, runtimeIdentifier);
         }
 
-        private bool ResolutionSucceeded(IEnumerable<RestoreTargetGraph> graphs)
+        private async Task<bool> ResolutionSucceeded(IEnumerable<RestoreTargetGraph> graphs, RemoteWalkContext context, CancellationToken token)
         {
             var success = true;
             foreach (var graph in graphs)
@@ -194,34 +194,13 @@ namespace NuGet.Commands
                 if (graph.Unresolved.Count > 0)
                 {
                     success = false;
-                    foreach (var unresolved in graph.Unresolved)
-                    {
-                        RestoreLogMessage logMessage = null;
-
-                        if (unresolved.TypeConstraintAllows(LibraryDependencyTarget.Package))
-                        {
-
-                        }
-                        else if (unresolved.TypeConstraintAllowsAnyOf(LibraryDependencyTarget.Project)
-                            || unresolved.TypeConstraintAllowsAnyOf(LibraryDependencyTarget.ExternalProject))
-                        {
-
-                        }
-                        else
-                        {
-                            var packageDisplayName = DiagnosticUtility.FormatDependency(unresolved.Name, unresolved.VersionRange);
-
-                            var message = string.Format(CultureInfo.CurrentCulture,
-                                Strings.Log_UnresolvedDependency,
-                                packageDisplayName,
-                                graph.Name);
-
-                            logMessage = RestoreLogMessage.CreateError(NuGetLogCode.NU1101, message);
-                        }
-
-                        _logger.Log(logMessage);
-                    }
                 }
+            }
+
+            if (!success)
+            {
+                // Log message for any unresolved dependencies
+                await UnresolvedMessages.LogAsync(graphs, context, context.Logger, token);
             }
 
             return success;
