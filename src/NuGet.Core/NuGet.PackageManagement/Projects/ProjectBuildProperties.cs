@@ -11,6 +11,7 @@ namespace NuGet.ProjectManagement
     {
         public const string BaseIntermediateOutputPath = "BaseIntermediateOutputPath";
         public const string PackageTargetFallback = "PackageTargetFallback";
+        public const string AssetTargetFallback = "AssetTargetFallback";
         public const string PackageVersion = "PackageVersion";
         public const string RestoreProjectStyle = "RestoreProjectStyle";
         public const string RuntimeIdentifier = "RuntimeIdentifier";
@@ -23,5 +24,13 @@ namespace NuGet.ProjectManagement
         public const string TargetPlatformMinVersion = "TargetPlatformMinVersion";
         public const string TargetPlatformVersion = "TargetPlatformVersion";
         public const string Version = "Version";
+        public const string RestorePackagesPath = "RestorePackagesPath";
+        public const string RestoreSources = "RestoreSources";
+        public const string RestoreFallbackFolders = "RestoreFallbackFolders";
+        public const string RestoreAdditionalProjectSources = nameof(RestoreAdditionalProjectSources);
+        public const string RestoreAdditionalProjectFallbackFolders = nameof(RestoreAdditionalProjectFallbackFolders);
+        public const string NoWarn = nameof(NoWarn);
+        public const string WarningsAsErrors = nameof(WarningsAsErrors);
+        public const string TreatWarningsAsErrors = nameof(TreatWarningsAsErrors);
     }
 }

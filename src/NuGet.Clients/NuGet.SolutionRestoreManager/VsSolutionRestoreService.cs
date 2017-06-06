@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft;
 using NuGet.Commands;
+using NuGet.Configuration;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
 using NuGet.PackageManagement.VisualStudio;
@@ -42,6 +43,17 @@ namespace NuGet.SolutionRestoreManager
         private const string RuntimeIdentifier = "RuntimeIdentifier";
         private const string RuntimeIdentifiers = "RuntimeIdentifiers";
         private const string RuntimeSupports = "RuntimeSupports";
+        private const string Clear = nameof(Clear);
+        private const string RestorePackagesPath = nameof(RestorePackagesPath);
+        private const string RestoreSources = nameof(RestoreSources);
+        private const string RestoreFallbackFolders = nameof(RestoreFallbackFolders);
+        private const string AssetTargetFallback = nameof(AssetTargetFallback);
+        private const string RestoreAdditionalProjectFallbackFolders = nameof(RestoreAdditionalProjectFallbackFolders);
+        private const string RestoreAdditionalProjectSources = nameof(RestoreAdditionalProjectSources);
+        private const string TreatWarningsAsErrors = nameof(TreatWarningsAsErrors);
+        private const string WarningsAsErrors = nameof(WarningsAsErrors);
+        private const string NoWarn = nameof(NoWarn);
+
 
         private static readonly Version Version20 = new Version(2, 0, 0, 0);
 
@@ -251,9 +263,22 @@ namespace NuGet.SolutionRestoreManager
                         .Select(item => ToProjectRestoreMetadataFrameworkInfo(item, projectDirectory))
                         .ToList(),
                     OriginalTargetFrameworks = originalTargetFrameworks,
-                    CrossTargeting = crossTargeting
+                    CrossTargeting = crossTargeting,
+
+                    // Read project properties for settings. ISettings values will be applied later since
+                    // this value is put in the nomination cache and ISettings could change.
+                    PackagesPath = GetRestoreProjectPath(projectRestoreInfo.TargetFrameworks),
+                    FallbackFolders = GetRestoreFallbackFolders(projectRestoreInfo.TargetFrameworks).ToList(),
+                    Sources = GetRestoreSources(projectRestoreInfo.TargetFrameworks)
+                                    .Select(e => new PackageSource(e))
+                                    .ToList(),
+                    ProjectWideWarningProperties = MSBuildRestoreUtility.GetWarningProperties(
+                        treatWarningsAsErrors: GetNonEvaluatedPropertyOrNull(projectRestoreInfo.TargetFrameworks, TreatWarningsAsErrors, e => e),
+                        warningsAsErrors: GetNonEvaluatedPropertyOrNull(projectRestoreInfo.TargetFrameworks, WarningsAsErrors, e => e),
+                        noWarn: GetNonEvaluatedPropertyOrNull(projectRestoreInfo.TargetFrameworks, NoWarn, e => e))
                 },
-                RuntimeGraph = GetRuntimeGraph(projectRestoreInfo)
+                RuntimeGraph = GetRuntimeGraph(projectRestoreInfo),
+                RestoreSettings = new ProjectRestoreSettings() { HideWarningsAndErrors = true }
             };
 
             return packageSpec;
@@ -273,6 +298,45 @@ namespace NuGet.SolutionRestoreManager
                 ?? GetNonEvaluatedPropertyOrNull(tfms, Version, NuGetVersion.Parse);
 
             return versionPropertyValue ?? PackageSpec.DefaultVersion;
+        }
+
+        private static string GetRestoreProjectPath(IVsTargetFrameworks tfms)
+        {
+            return GetNonEvaluatedPropertyOrNull(tfms, RestorePackagesPath, e => e);
+        }
+
+        private static string[] GetRestoreSources(IVsTargetFrameworks tfms)
+        {
+            var sources = MSBuildStringUtility.Split(GetNonEvaluatedPropertyOrNull(tfms, RestoreSources, e => e));
+
+            sources = HandleClear(sources);
+
+            var additional = MSBuildStringUtility.Split(GetNonEvaluatedPropertyOrNull(tfms, RestoreAdditionalProjectSources, e => e));
+            sources = sources.Concat(additional).ToArray();
+
+            return sources;
+        }
+
+        private static string[] GetRestoreFallbackFolders(IVsTargetFrameworks tfms)
+        {
+            var folders = MSBuildStringUtility.Split(GetNonEvaluatedPropertyOrNull(tfms, RestoreFallbackFolders, e => e));
+
+            folders = HandleClear(folders);
+
+            var additional = MSBuildStringUtility.Split(GetNonEvaluatedPropertyOrNull(tfms, RestoreAdditionalProjectFallbackFolders, e => e));
+            folders = folders.Concat(additional).ToArray();
+
+            return folders;
+        }
+
+        private static string[] HandleClear(string[] input)
+        {
+            if (input.Any(e => StringComparer.OrdinalIgnoreCase.Equals(Clear, e)))
+            {
+                return new string[] { Clear };
+            }
+
+            return input;
         }
 
         // Trying to fetch a property value from tfm property bags.
@@ -328,21 +392,16 @@ namespace NuGet.SolutionRestoreManager
                 FrameworkName = NuGetFramework.Parse(targetFrameworkInfo.TargetFrameworkMoniker)
             };
 
-            var ptf = GetPropertyValueOrNull(targetFrameworkInfo.Properties, PackageTargetFallback);
-            if (!string.IsNullOrEmpty(ptf))
-            {
-                var fallbackList = MSBuildStringUtility.Split(ptf)
-                    .Select(NuGetFramework.Parse)
-                    .ToList();
+            var ptf = MSBuildStringUtility.Split(GetPropertyValueOrNull(targetFrameworkInfo.Properties, PackageTargetFallback))
+                                          .Select(NuGetFramework.Parse)
+                                          .ToList();
 
-                tfi.Imports = fallbackList;
+            var atf = MSBuildStringUtility.Split(GetPropertyValueOrNull(targetFrameworkInfo.Properties, AssetTargetFallback))
+                                          .Select(NuGetFramework.Parse)
+                                          .ToList();
 
-                // Update the PackageSpec framework to include fallback frameworks
-                if (tfi.Imports.Count != 0)
-                {
-                    tfi.FrameworkName = new FallbackFramework(tfi.FrameworkName, fallbackList);
-                }
-            }
+            // Update TFI with fallback properties
+            AssetTargetFallbackUtility.ApplyFramework(tfi, ptf, atf);
 
             if (targetFrameworkInfo.PackageReferences != null)
             {
@@ -386,8 +445,14 @@ namespace NuGet.SolutionRestoreManager
                     typeConstraint: LibraryDependencyTarget.Package),
 
                 // Mark packages coming from the SDK as AutoReferenced
-                AutoReferenced = GetPropertyBoolOrFalse(item, "IsImplicitlyDefined")
+                AutoReferenced = GetPropertyBoolOrFalse(item, "IsImplicitlyDefined"),
             };
+
+            // Add warning suppressions
+            foreach (var code in MSBuildRestoreUtility.GetNuGetLogCodes(GetPropertyValueOrNull(item, NoWarn)))
+            {
+                dependency.NoWarn.Add(code);
+            }
 
             MSBuildRestoreUtility.ApplyIncludeFlags(
                 dependency,

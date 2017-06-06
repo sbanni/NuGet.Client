@@ -1,10 +1,11 @@
-// Copyright (c) .NET Foundation. All rights reserved.
+﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
+using NuGet.Commands;
 using NuGet.Common;
 using Xunit;
 
@@ -27,19 +28,6 @@ namespace NuGet.Protocol.Plugins.Tests
             var test = new LogRequestHandlerTest();
 
             Assert.Equal(CancellationToken.None, test.Handler.CancellationToken);
-        }
-
-        [Fact]
-        public async Task HandleCancelAsync_Throws()
-        {
-            var test = new LogRequestHandlerTest();
-
-            await Assert.ThrowsAsync<NotSupportedException>(
-                () => test.Handler.HandleCancelAsync(
-                    Mock.Of<IConnection>(),
-                    test.Request,
-                    Mock.Of<IResponseHandler>(),
-                    CancellationToken.None));
         }
 
         [Fact]
@@ -228,7 +216,7 @@ namespace NuGet.Protocol.Plugins.Tests
         [InlineData(LogLevel.Warning)]
         public void GetLogLevel_ReturnsLoggerLogLevel(LogLevel expectedLogLevel)
         {
-            var logger = new CollectorLogger(Mock.Of<ILogger>(), expectedLogLevel);
+            var logger = new RestoreCollectorLogger(Mock.Of<ILogger>(), expectedLogLevel);
             var actualLogLevel = LogRequestHandler.GetLogLevel(logger);
 
             Assert.Equal(expectedLogLevel, actualLogLevel);
@@ -288,7 +276,7 @@ namespace NuGet.Protocol.Plugins.Tests
             internal LogRequestHandlerTest(LogLevel logLevel = LogLevel.Debug)
             {
                 Logger = new Mock<ILogger>(MockBehavior.Strict);
-                Handler = new LogRequestHandler(new CollectorLogger(Logger.Object, logLevel));
+                Handler = new LogRequestHandler(new RestoreCollectorLogger(Logger.Object, logLevel));
                 Request = MessageUtilities.Create(
                     requestId: "a",
                     type: MessageType.Request,

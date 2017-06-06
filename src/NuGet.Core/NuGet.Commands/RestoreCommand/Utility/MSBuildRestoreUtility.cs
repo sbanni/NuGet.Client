@@ -22,6 +22,9 @@ namespace NuGet.Commands
     /// </summary>
     public static class MSBuildRestoreUtility
     {
+        // Clear keyword for properties.
+        public static readonly string Clear = nameof(Clear);
+
         /// <summary>
         /// Convert MSBuild items to a DependencyGraphSpec.
         /// </summary>
@@ -166,18 +169,20 @@ namespace NuGet.Commands
                 // Read project references for all
                 AddProjectReferences(result, items);
 
-                // Read package references for netcore, tools, and standalone
                 if (restoreType == ProjectStyle.PackageReference
                     || restoreType == ProjectStyle.Standalone
-                    || restoreType == ProjectStyle.DotnetCliTool)
+                    || restoreType == ProjectStyle.DotnetCliTool
+                    || restoreType == ProjectStyle.ProjectJson)
                 {
-                    AddFrameworkAssemblies(result, items);
-                    AddPackageReferences(result, items);
-                    result.RestoreMetadata.OutputPath = specItem.GetProperty("OutputPath");
 
                     foreach (var source in MSBuildStringUtility.Split(specItem.GetProperty("Sources")))
                     {
                         result.RestoreMetadata.Sources.Add(new PackageSource(source));
+                    }
+
+                    foreach (var configFilePath in MSBuildStringUtility.Split(specItem.GetProperty("ConfigFilePaths")))
+                    {
+                        result.RestoreMetadata.ConfigFilePaths.Add(configFilePath);
                     }
 
                     foreach (var folder in MSBuildStringUtility.Split(specItem.GetProperty("FallbackFolders")))
@@ -186,6 +191,17 @@ namespace NuGet.Commands
                     }
 
                     result.RestoreMetadata.PackagesPath = specItem.GetProperty("PackagesPath");
+
+                    result.RestoreMetadata.OutputPath = specItem.GetProperty("OutputPath");
+                }
+
+                // Read package references for netcore, tools, and standalone
+                if (restoreType == ProjectStyle.PackageReference
+                    || restoreType == ProjectStyle.Standalone
+                    || restoreType == ProjectStyle.DotnetCliTool)
+                {
+                    AddFrameworkAssemblies(result, items);
+                    AddPackageReferences(result, items);
 
                     // Store the original framework strings for msbuild conditionals
                     foreach (var originalFramework in GetFrameworksStrings(specItem))
@@ -219,6 +235,9 @@ namespace NuGet.Commands
 
                     // True for .NETCore projects.
                     result.RestoreMetadata.SkipContentFileWrite = IsPropertyTrue(specItem, "SkipContentFileWrite");
+
+                    // Warning properties
+                    result.RestoreMetadata.ProjectWideWarningProperties = GetWarningProperties(specItem);
                 }
 
                 if (restoreType == ProjectStyle.ProjectJson)
@@ -273,34 +292,74 @@ namespace NuGet.Commands
             }
         }
 
+        /// <summary>
+        /// True if the list contains CLEAR.
+        /// </summary>
+        public static bool ContainsClearKeyword(IEnumerable<string> values)
+        {
+            return (values?.Contains(Clear, StringComparer.OrdinalIgnoreCase) == true);
+        }
+
+        /// <summary>
+        /// True if the list contains CLEAR and non-CLEAR keywords.
+        /// </summary>
+        /// <remarks>CLEAR;CLEAR is considered valid.</remarks>
+        public static bool HasInvalidClear(IEnumerable<string> values)
+        {
+            return ContainsClearKeyword(values)
+                    && (values?.Any(e => !StringComparer.OrdinalIgnoreCase.Equals(e, Clear)) == true);
+        }
+
+        /// <summary>
+        /// Logs an error if CLEAR is used with non-CLEAR entries.
+        /// </summary>
+        /// <returns>True if an invalid combination exists.</returns>
+        public static bool LogErrorForClearIfInvalid(IEnumerable<string> values, string projectPath, ILogger logger)
+        {
+            if (HasInvalidClear(values))
+            {
+                var text = string.Format(CultureInfo.CurrentCulture, Strings.CannotBeUsedWithOtherValues, Clear);
+                var message = LogMessage.CreateError(NuGetLogCode.NU1002, text);
+                message.ProjectPath = projectPath;
+                logger.Log(message);
+
+                return true;
+            }
+
+            return false;
+        }
+
         private static void AddPackageTargetFallbacks(PackageSpec spec, IEnumerable<IMSBuildItem> items)
         {
             foreach (var item in GetItemByType(items, "TargetFrameworkInformation"))
             {
                 var frameworkString = item.GetProperty("TargetFramework");
-                TargetFrameworkInformation targetFrameworkInfo = null;
+                var frameworks = new List<TargetFrameworkInformation>();
 
                 if (!string.IsNullOrEmpty(frameworkString))
                 {
-                    targetFrameworkInfo = spec.GetTargetFramework(NuGetFramework.Parse(frameworkString));
+                    frameworks.Add(spec.GetTargetFramework(NuGetFramework.Parse(frameworkString)));
+                }
+                else
+                {
+                    frameworks.AddRange(spec.TargetFrameworks);
                 }
 
-                Debug.Assert(targetFrameworkInfo != null, $"PackageSpec does not contain the target framework: {frameworkString}");
-
-                if (targetFrameworkInfo != null)
+                foreach (var targetFrameworkInfo in frameworks)
                 {
-                    var fallbackList = MSBuildStringUtility.Split(item.GetProperty("PackageTargetFallback"))
+                    var packageTargetFallback = MSBuildStringUtility.Split(item.GetProperty("PackageTargetFallback"))
                         .Select(NuGetFramework.Parse)
                         .ToList();
 
-                    targetFrameworkInfo.Imports = fallbackList;
+                    var assetTargetFallback = MSBuildStringUtility.Split(item.GetProperty(AssetTargetFallbackUtility.AssetTargetFallback))
+                        .Select(NuGetFramework.Parse)
+                        .ToList();
 
-                    // Update the PackageSpec framework to include fallback frameworks
-                    if (targetFrameworkInfo.Imports.Count > 0)
-                    {
-                        targetFrameworkInfo.FrameworkName =
-                            new FallbackFramework(targetFrameworkInfo.FrameworkName, fallbackList);
-                    }
+                    // Throw if an invalid combination was used.
+                    AssetTargetFallbackUtility.EnsureValidFallback(packageTargetFallback, assetTargetFallback, spec.FilePath);
+
+                    // Update the framework appropriately
+                    AssetTargetFallbackUtility.ApplyFramework(targetFrameworkInfo, packageTargetFallback, assetTargetFallback);
                 }
             }
         }
@@ -422,6 +481,14 @@ namespace NuGet.Commands
                     name: item.GetProperty("Id"),
                     versionRange: GetVersionRange(item),
                     typeConstraint: LibraryDependencyTarget.Package);
+
+                dependency.AutoReferenced = IsPropertyTrue(item, "IsImplicitlyDefined");
+
+                // Add warning suppressions
+                foreach (var code in GetNuGetLogCodes(item.GetProperty("NoWarn")))
+                {
+                    dependency.NoWarn.Add(code);
+                }
 
                 ApplyIncludeFlags(dependency, item);
 
@@ -644,6 +711,30 @@ namespace NuGet.Commands
             }
         }
 
+        private static WarningProperties GetWarningProperties(IMSBuildItem specItem)
+        {
+            return GetWarningProperties(
+                treatWarningsAsErrors: specItem.GetProperty("TreatWarningsAsErrors"),
+                warningsAsErrors: specItem.GetProperty("WarningsAsErrors"),
+                noWarn: specItem.GetProperty("NoWarn"));
+        }
+
+        /// <summary>
+        /// Create warning properties from the msbuild property strings.
+        /// </summary>
+        public static WarningProperties GetWarningProperties(string treatWarningsAsErrors, string warningsAsErrors, string noWarn)
+        {
+            var props = new WarningProperties()
+            {
+                AllWarningsAsErrors = MSBuildStringUtility.IsTrue(treatWarningsAsErrors)
+            };
+
+            props.WarningsAsErrors.UnionWith(GetNuGetLogCodes(warningsAsErrors));
+            props.NoWarn.UnionWith(GetNuGetLogCodes(noWarn));
+
+            return props;
+        }
+
         private static bool IsPropertyTrue(IMSBuildItem item, string propertyName)
         {
             return StringComparer.OrdinalIgnoreCase.Equals(item.GetProperty(propertyName), Boolean.TrueString);
@@ -660,12 +751,27 @@ namespace NuGet.Commands
 
             bool val;
             if (!string.IsNullOrEmpty(settingValue)
-                && Boolean.TryParse(settingValue, out val))
+                && bool.TryParse(settingValue, out val))
             {
                 return val;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Splits and parses a ; or , delimited list of log codes.
+        /// Ignores codes that are unknown.
+        /// </summary>
+        public static IEnumerable<NuGetLogCode> GetNuGetLogCodes(string s)
+        {
+            foreach (var item in MSBuildStringUtility.Split(s, ';', ','))
+            {
+                if (s.StartsWith("NU", StringComparison.OrdinalIgnoreCase) && Enum.TryParse<NuGetLogCode>(item, out var result))
+                {
+                    yield return result;
+                }
+            }
         }
     }
 }

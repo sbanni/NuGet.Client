@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
@@ -21,6 +22,8 @@ namespace NuGet.ProjectModel
     public class JsonPackageSpecReader
     {
         public static readonly string RestoreOptions = "restore";
+        public static readonly string RestoreSettings = "restoreSettings";
+        public static readonly string HideWarningsAndErrors = "hideWarningsAndErrors";
         public static readonly string PackOptions = "packOptions";
         public static readonly string PackageType = "packageType";
         public static readonly string Files = "files";
@@ -161,6 +164,8 @@ namespace NuGet.ProjectModel
 
             packageSpec.PackOptions = GetPackOptions(packageSpec, rawPackageSpec);
 
+            packageSpec.RestoreSettings = GetRestoreSettings(packageSpec, rawPackageSpec);
+
             packageSpec.RestoreMetadata = GetMSBuildMetadata(packageSpec, rawPackageSpec);
 
             // Read the runtime graph
@@ -180,6 +185,19 @@ namespace NuGet.ProjectModel
             }
 
             return packageSpec;
+        }
+
+        private static ProjectRestoreSettings GetRestoreSettings(PackageSpec packageSpec, JObject rawPackageSpec)
+        {
+            var rawRestoreSettings = rawPackageSpec.Value<JToken>(RestoreSettings) as JObject;
+            var restoreSettings = new ProjectRestoreSettings();
+
+            if (rawRestoreSettings != null)
+            {
+                restoreSettings.HideWarningsAndErrors = GetBoolOrFalse(rawRestoreSettings, HideWarningsAndErrors, packageSpec.FilePath);
+            }
+
+            return restoreSettings;
         }
 
         private static ProjectRestoreMetadata GetMSBuildMetadata(PackageSpec packageSpec, JObject rawPackageSpec)
@@ -269,6 +287,18 @@ namespace NuGet.ProjectModel
                     msbuildMetadata.TargetFrameworks.Add(frameworkGroup);
                 }
             }
+            // Add the config file paths to the equals method
+            msbuildMetadata.ConfigFilePaths = new List<string>();
+
+            var configFilePaths = rawMSBuildMetadata.GetValue<JArray>("configFilePaths");
+            if (configFilePaths != null)
+            {
+                foreach (var fallbackFolder in configFilePaths.Select(t => t.Value<string>()))
+                {
+                    msbuildMetadata.ConfigFilePaths.Add(fallbackFolder);
+                }
+            }
+
 
             msbuildMetadata.FallbackFolders = new List<string>();
 
@@ -290,6 +320,16 @@ namespace NuGet.ProjectModel
                 {
                     msbuildMetadata.OriginalTargetFrameworks.Add(orignalFramework);
                 }
+            }
+
+            var warningPropertiesObj = rawMSBuildMetadata.GetValue<JObject>("warningProperties");
+            if (warningPropertiesObj != null)
+            {
+                var allWarningsAsErrors = warningPropertiesObj.GetValue<bool>("allWarningsAsErrors");
+                var warnAsError = new HashSet<NuGetLogCode>(GetNuGetLogCodeEnumerableFromJArray(warningPropertiesObj["warnAsError"]));
+                var noWarn = new HashSet<NuGetLogCode>(GetNuGetLogCodeEnumerableFromJArray(warningPropertiesObj["noWarn"]));
+
+                msbuildMetadata.ProjectWideWarningProperties = new WarningProperties(warnAsError, noWarn, allWarningsAsErrors);
             }
 
             return msbuildMetadata;
@@ -425,6 +465,7 @@ namespace NuGet.ProjectModel
                     var dependencyIncludeFlagsValue = LibraryIncludeFlags.All;
                     var dependencyExcludeFlagsValue = LibraryIncludeFlags.None;
                     var suppressParentFlagsValue = LibraryIncludeFlagUtils.DefaultSuppressParent;
+                    var noWarn = new List<NuGetLogCode>();
 
                     // This method handles both the dependencies and framework assembly sections.
                     // Framework references should be limited to references.
@@ -490,6 +531,9 @@ namespace NuGet.ProjectModel
                             // This overrides any settings that came from the type property.
                             suppressParentFlagsValue = LibraryIncludeFlagUtils.GetFlags(strings);
                         }
+
+                        noWarn = GetNuGetLogCodeEnumerableFromJArray(dependencyValue["noWarn"])
+                            .ToList();
 
                         var targetToken = dependencyValue["target"];
 
@@ -563,6 +607,7 @@ namespace NuGet.ProjectModel
                         IncludeType = includeFlags,
                         SuppressParent = suppressParentFlagsValue,
                         AutoReferenced = autoReferenced,
+                        NoWarn = noWarn.ToList()
                     });
                 }
             }
@@ -637,6 +682,23 @@ namespace NuGet.ProjectModel
             return true;
         }
 
+        internal static IEnumerable<NuGetLogCode> GetNuGetLogCodeEnumerableFromJArray(JToken token)
+        {
+            var items = new List<NuGetLogCode>();
+            var array = (JArray)token;
+            if (array != null)
+            {
+                foreach (var child in array)
+                {
+                    if (child.Type == JTokenType.String && Enum.TryParse(child.Value<string>(), out NuGetLogCode code))
+                    {
+                        items.Add(code);
+                    }
+                }
+            }
+            return items;
+        }
+
         private static void BuildTargetFrameworks(PackageSpec packageSpec, JObject rawPackageSpec)
         {
             // The frameworks node is where target frameworks go
@@ -658,7 +720,7 @@ namespace NuGet.ProjectModel
                 {
                     try
                     {
-                        BuildTargetFrameworkNode(packageSpec, framework);
+                        BuildTargetFrameworkNode(packageSpec, framework, packageSpec.FilePath);
                     }
                     catch (Exception ex)
                     {
@@ -668,11 +730,12 @@ namespace NuGet.ProjectModel
             }
         }
 
-        private static bool BuildTargetFrameworkNode(PackageSpec packageSpec, KeyValuePair<string, JToken> targetFramework)
+        private static bool BuildTargetFrameworkNode(PackageSpec packageSpec, KeyValuePair<string, JToken> targetFramework, string filePath)
         {
             var frameworkName = GetFramework(targetFramework.Key);
 
             var properties = targetFramework.Value.Value<JObject>();
+            var assetTargetFallback = GetBoolOrFalse(properties, "assetTargetFallback", filePath);
 
             var importFrameworks = GetImports(properties, packageSpec);
 
@@ -681,7 +744,14 @@ namespace NuGet.ProjectModel
 
             if (importFrameworks.Count != 0)
             {
-                updatedFramework = new FallbackFramework(frameworkName, importFrameworks);
+                if (assetTargetFallback)
+                {
+                    updatedFramework = new AssetTargetFallbackFramework(frameworkName, importFrameworks);
+                }
+                else
+                {
+                    updatedFramework = new FallbackFramework(frameworkName, importFrameworks);
+                }
             }
 
             var targetFrameworkInformation = new TargetFrameworkInformation
@@ -689,7 +759,8 @@ namespace NuGet.ProjectModel
                 FrameworkName = updatedFramework,
                 Dependencies = new List<LibraryDependency>(),
                 Imports = importFrameworks,
-                Warn = GetWarnSetting(properties)
+                Warn = GetWarnSetting(properties),
+                AssetTargetFallback = assetTargetFallback
             };
 
             PopulateDependencies(
@@ -716,7 +787,7 @@ namespace NuGet.ProjectModel
 
         private static List<NuGetFramework> GetImports(JObject properties, PackageSpec packageSpec)
         {
-            List<NuGetFramework> frameworks = new List<NuGetFramework>();
+            var frameworks = new List<NuGetFramework>();
 
             var importsProperty = properties["imports"];
 

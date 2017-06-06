@@ -47,9 +47,14 @@ namespace NuGet.Common
         NU1001 = 1001,
 
         /// <summary>
-        /// 
+        /// Invalid combination with CLEAR
         /// </summary>
         NU1002 = 1002,
+
+        /// <summary>
+        /// Invalid combination of PTF and ATF
+        /// </summary>
+        NU1003 = 1003,
 
         /// <summary>
         /// Unable to resolve package, generic message for unknown type constraints.

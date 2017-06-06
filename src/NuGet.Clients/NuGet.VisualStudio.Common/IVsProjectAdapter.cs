@@ -40,6 +40,51 @@ namespace NuGet.VisualStudio
         string PackageTargetFallback { get; }
 
         /// <summary>
+        /// AssetTargetFallback project property
+        /// </summary>
+        string AssetTargetFallback { get; }
+
+        /// <summary>
+        /// Restore Packages Path DTE property
+        /// </summary>
+        string RestorePackagesPath { get; }
+
+        /// <summary>
+        /// Restore Sources DTE property
+        /// </summary>
+        string RestoreSources { get; }
+
+        /// <summary>
+        /// RestoreFallbackFolders DTE property
+        /// </summary>
+        string RestoreFallbackFolders { get; }
+
+        /// <summary>
+        /// Additional Sources DTE property
+        /// </summary>
+        string RestoreAdditionalProjectSources { get; }
+
+        /// <summary>
+        /// Additional fallback folders DTE property
+        /// </summary>
+        string RestoreAdditionalProjectFallbackFolders { get; }
+
+        /// <summary>
+        /// Comma or Semicolon separated list of NU* diagnostic codes e.g. NU1000,NU1001
+        /// </summary>
+        string NoWarn { get; }
+
+        /// <summary>
+        /// Comma or Semicolon separated list of NU* diagnostic codes e.g. NU1000,NU1001
+        /// </summary>
+        string WarningsAsErrors { get; }
+
+        /// <summary>
+        /// TreatWarningsAsErrors true/false
+        /// </summary>
+        string TreatWarningsAsErrors { get; }
+
+        /// <summary>
         /// In unavoidable circumstances where we need to DTE object, it's exposed here
         /// </summary>
         EnvDTE.Project Project { get; }

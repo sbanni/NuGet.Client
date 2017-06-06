@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
+using NuGet.Common;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
 using NuGet.RuntimeModel;
@@ -51,6 +52,7 @@ namespace NuGet.ProjectModel
             SetArrayValue(writer, "contentFiles", packageSpec.ContentFiles);
             SetDictionaryValue(writer, "packInclude", packageSpec.PackInclude);
             SetPackOptions(writer, packageSpec);
+            SetRestoreSettings(writer, packageSpec);
             SetMSBuildMetadata(writer, packageSpec);
             SetDictionaryValues(writer, "scripts", packageSpec.Scripts);
 
@@ -81,7 +83,7 @@ namespace NuGet.ProjectModel
                 throw new ArgumentException(Strings.ArgumentNullOrEmpty, nameof(filePath));
             }
 
-            var writer = new RuntimeModel.JsonObjectWriter();
+            var writer = new JsonObjectWriter();
 
             Write(packageSpec, writer);
 
@@ -92,6 +94,23 @@ namespace NuGet.ProjectModel
                 jsonWriter.Formatting = Formatting.Indented;
                 writer.WriteTo(jsonWriter);
             }
+        }
+
+        private static void SetRestoreSettings(IObjectWriter writer, PackageSpec packageSpec)
+        {
+            var restoreSettings = packageSpec.RestoreSettings;
+
+            // Do not write Restore Setting if the HideWarningsAndErrors is false
+            // This should be changed in the future as more properties are added to ProjectRestoreSettings
+            if (restoreSettings == null || !restoreSettings.HideWarningsAndErrors)
+            {
+                return;
+            }
+            writer.WriteObjectStart(JsonPackageSpecReader.RestoreSettings);
+
+            SetValueIfTrue(writer, JsonPackageSpecReader.HideWarningsAndErrors, restoreSettings.HideWarningsAndErrors);
+
+            writer.WriteObjectEnd();
         }
 
         private static void SetMSBuildMetadata(IObjectWriter writer, PackageSpec packageSpec)
@@ -141,13 +160,14 @@ namespace NuGet.ProjectModel
                     msbuildMetadata.SkipContentFileWrite);
 
             SetArrayValue(writer, "fallbackFolders", msbuildMetadata.FallbackFolders);
+            SetArrayValue(writer, "configFilePaths", msbuildMetadata.ConfigFilePaths);
             SetArrayValue(writer, "originalTargetFrameworks", msbuildMetadata.OriginalTargetFrameworks);
 
             if (msbuildMetadata.Sources?.Count > 0)
             {
                 writer.WriteObjectStart("sources");
 
-                foreach (var source in msbuildMetadata.Sources)
+                foreach (var source in msbuildMetadata.Sources.OrderBy(e => e.Source, StringComparer.Ordinal))
                 {
                     // "source": {}
                     writer.WriteObjectStart(source.Source);
@@ -219,7 +239,47 @@ namespace NuGet.ProjectModel
                 writer.WriteObjectEnd();
             }
 
+            SetWarningProperties(writer, msbuildMetadata);
+
             writer.WriteObjectEnd();
+        }
+
+        private static void SetWarningProperties(IObjectWriter writer, ProjectRestoreMetadata msbuildMetadata)
+        {
+            if (msbuildMetadata.ProjectWideWarningProperties != null &&
+                (msbuildMetadata.ProjectWideWarningProperties.AllWarningsAsErrors ||
+                 msbuildMetadata.ProjectWideWarningProperties.NoWarn.Count > 0 ||
+                 msbuildMetadata.ProjectWideWarningProperties.WarningsAsErrors.Count > 0))
+            {
+                writer.WriteObjectStart("warningProperties");
+
+                SetValueIfTrue(writer, "allWarningsAsErrors", msbuildMetadata.ProjectWideWarningProperties.AllWarningsAsErrors);
+
+                if (msbuildMetadata.ProjectWideWarningProperties.NoWarn.Count > 0)
+                {
+                    SetArrayValue(writer, "noWarn", msbuildMetadata
+                       .ProjectWideWarningProperties
+                       .NoWarn
+                       .ToArray()
+                       .OrderBy(c => c)
+                       .Select(c => c.GetName())
+                       .Where(c => !string.IsNullOrEmpty(c)));
+                }
+
+                if (msbuildMetadata.ProjectWideWarningProperties.WarningsAsErrors.Count > 0)
+                {
+                    SetArrayValue(writer, "warnAsError", msbuildMetadata
+                        .ProjectWideWarningProperties
+                        .WarningsAsErrors
+                        .ToArray()
+                        .OrderBy(c => c)
+                        .Select(c => c.GetName())
+                        .Where(c => !string.IsNullOrEmpty(c)));
+
+                }
+
+                writer.WriteObjectEnd();
+            }
         }
 
         private static void SetPackOptions(IObjectWriter writer, PackageSpec packageSpec)
@@ -339,6 +399,16 @@ namespace NuGet.ProjectModel
 
                     SetValueIfTrue(writer, "autoReferenced", dependency.AutoReferenced);
 
+                    if (dependency.NoWarn.Count > 0)
+                    {
+                        SetArrayValue(writer, "noWarn", dependency
+                            .NoWarn
+                            .OrderBy(c => c)
+                            .Distinct()
+                            .Select(code => code.GetName())
+                            .Where(s => !string.IsNullOrEmpty(s)));
+                    }
+
                     writer.WriteObjectEnd();
                 }
                 else
@@ -372,6 +442,8 @@ namespace NuGet.ProjectModel
 
                     SetDependencies(writer, framework.Dependencies);
                     SetImports(writer, framework.Imports);
+                    SetValueIfTrue(writer, "assetTargetFallback", framework.AssetTargetFallback);
+                    SetValueIfTrue(writer, "warn", framework.Warn);
 
                     writer.WriteObjectEnd();
                 }

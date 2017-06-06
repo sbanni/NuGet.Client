@@ -1,4 +1,4 @@
-{
+﻿{
   "title": "title",
   "version": "1.2.3",
   "description": "description",
@@ -37,6 +37,9 @@
     "licenseUrl": "licenseUrl",
     "requireLicenseAcceptance": true
   },
+  "restoreSettings": {
+    "hideWarningsAndErrors": true
+  },
   "restore": {
     "projectUniqueName": "projectUniqueName",
     "projectName": "projectName",
@@ -47,6 +50,11 @@
     "projectStyle": "PackageReference",
     "crossTargeting": true,
     "fallbackFolders": [
+      "b",
+      "a",
+      "c"
+    ],
+    "configFilePaths": [
       "b",
       "a",
       "c"
@@ -83,24 +91,43 @@
     ]
   },
   "dependencies": {
-    "range": {
+    "library": {
       "include": "Build",
       "target": "Package",
       "version": "[1.2.3, )"
+    },
+    "libraryRangeWithNoWarnGlobal": {
+      "include": "Build",
+      "target": "Package",
+      "version": "[1.2.3, )",
+      "noWarn": [
+        "NU1500",
+        "NU1607"
+      ]
     }
   },
   "frameworks": {
     "frameworkidentifier123-frameworkprofile": {
-      "dependencies": {
-        "range": {
-          "include": "Build",
-          "target": "Package",
-          "version": "[1.2.3, )"
-        }
-      },
       "imports": [
         "frameworkidentifier123-frameworkprofile"
       ]
+    },
+    "frameworkidentifierwithnowarn125-frameworkprofilewithnowarn": {
+      "dependencies": {
+        "libraryWithNoWarn": {
+          "include": "Build",
+          "target": "Package",
+          "version": "[1.2.3, )",
+          "noWarn": [
+            "NU1500",
+            "NU1601"
+          ]
+        }
+      },
+      "imports": [
+        "frameworkidentifierwithnowarn125-frameworkprofilewithnowarn"
+      ],
+      "warn": true
     }
   },
   "runtimes": {

@@ -310,25 +310,22 @@ namespace NuGet.Protocol.Plugins.Tests
         {
             using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
             using (var connection = new ConnectionMock())
-            using (var messageSentEvent = new ManualResetEventSlim(initialState: false))
             {
                 dispatcher.SetConnection(connection);
-
-                var request = new Message(_idGenerator.Id, MessageType.Request, MessageMethod.GetOperationClaims);
-
-                var requestTask = dispatcher.DispatchRequestAsync<Request, Response>(
-                    request.Method,
-                    new Request(),
-                    cancellationToken: CancellationToken.None);
 
                 Message message = null;
 
                 connection.MessageSent += (object sender, MessageEventArgs e) =>
                 {
                     message = e.Message;
-
-                    messageSentEvent.Set();
                 };
+
+                var request = new Message(_idGenerator.Id, MessageType.Request, MessageMethod.GetOperationClaims);
+
+                var requestTask = dispatcher.DispatchRequestAsync<Request, Response>(
+                    request.Method,
+                    new Request(),
+                    CancellationToken.None);
 
                 await dispatcher.DispatchCancelAsync(request, CancellationToken.None);
 
@@ -418,9 +415,15 @@ namespace NuGet.Protocol.Plugins.Tests
         {
             using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
             using (var connection = new ConnectionMock())
-            using (var messageSentEvent = new ManualResetEventSlim(initialState: false))
             {
                 dispatcher.SetConnection(connection);
+
+                Message message = null;
+
+                connection.MessageSent += (object sender, MessageEventArgs e) =>
+                {
+                    message = e.Message;
+                };
 
                 var request = new Message(
                     _idGenerator.Id,
@@ -431,18 +434,9 @@ namespace NuGet.Protocol.Plugins.Tests
                 var requestTask = dispatcher.DispatchRequestAsync<Request, Response>(
                     request.Method,
                     new Request(),
-                    cancellationToken: CancellationToken.None);
+                    CancellationToken.None);
 
                 var fault = new Fault(message: "a");
-
-                Message message = null;
-
-                connection.MessageSent += (object sender, MessageEventArgs e) =>
-                {
-                    message = e.Message;
-
-                    messageSentEvent.Set();
-                };
 
                 await dispatcher.DispatchFaultAsync(request, fault, CancellationToken.None);
 
@@ -534,9 +528,15 @@ namespace NuGet.Protocol.Plugins.Tests
         {
             using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
             using (var connection = new ConnectionMock())
-            using (var messageSentEvent = new ManualResetEventSlim(initialState: false))
             {
                 dispatcher.SetConnection(connection);
+
+                Message message = null;
+
+                connection.MessageSent += (object sender, MessageEventArgs e) =>
+                {
+                    message = e.Message;
+                };
 
                 var payload = JObject.FromObject(new Request());
                 var request = new Message(
@@ -549,16 +549,7 @@ namespace NuGet.Protocol.Plugins.Tests
                 var requestTask = dispatcher.DispatchRequestAsync<Request, Response>(
                     request.Method,
                     new Request(),
-                    cancellationToken: CancellationToken.None);
-
-                Message message = null;
-
-                connection.MessageSent += (object sender, MessageEventArgs e) =>
-                {
-                    message = e.Message;
-
-                    messageSentEvent.Set();
-                };
+                    CancellationToken.None);
 
                 await dispatcher.DispatchProgressAsync(request, progress, CancellationToken.None);
 
@@ -579,7 +570,7 @@ namespace NuGet.Protocol.Plugins.Tests
                 var result = await dispatcher.DispatchRequestAsync<HandshakeRequest, HandshakeResponse>(
                     MessageMethod.Handshake,
                     new HandshakeRequest(version, version),
-                    cancellationToken: CancellationToken.None);
+                    CancellationToken.None);
 
                 Assert.Null(result);
             }
@@ -617,7 +608,7 @@ namespace NuGet.Protocol.Plugins.Tests
                 var requestTask = dispatcher.DispatchRequestAsync<Request, Response>(
                     _method,
                     new Request(),
-                    cancellationToken: CancellationToken.None);
+                    CancellationToken.None);
 
                 connection.SimulateResponse(response);
 
@@ -734,6 +725,196 @@ namespace NuGet.Protocol.Plugins.Tests
 
                 Assert.Throws<ProtocolException>(
                     () => connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(fault)));
+            }
+        }
+
+        [Fact]
+        public async Task OnMessageReceived_DoesNotThrowForResponseAfterWaitForResponseIsCancelled()
+        {
+            using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
+            using (var cancellationTokenSource = new CancellationTokenSource())
+            using (var sentEvent = new ManualResetEventSlim(initialState: false))
+            {
+                var connection = new Mock<IConnection>(MockBehavior.Strict);
+
+                connection.SetupGet(x => x.Options)
+                    .Returns(ConnectionOptions.CreateDefault());
+
+                connection.Setup(x => x.SendAsync(It.IsNotNull<Message>(), It.IsAny<CancellationToken>()))
+                    .Callback<Message, CancellationToken>(
+                        (message, cancellationToken) =>
+                        {
+                            sentEvent.Set();
+                        })
+                    .Returns(Task.FromResult(0));
+
+                dispatcher.SetConnection(connection.Object);
+
+                var outboundRequestTask = Task.Run(() => dispatcher.DispatchRequestAsync<PrefetchPackageRequest, PrefetchPackageResponse>(
+                    MessageMethod.PrefetchPackage,
+                    new PrefetchPackageRequest(
+                        packageSourceRepository: "a",
+                        packageId: "b",
+                        packageVersion: "c"),
+                    cancellationTokenSource.Token));
+
+                sentEvent.Wait();
+
+                cancellationTokenSource.Cancel();
+
+                await Assert.ThrowsAsync<TaskCanceledException>(() => outboundRequestTask);
+
+                var response = MessageUtilities.Create(
+                    _idGenerator.Id,
+                    MessageType.Response,
+                    MessageMethod.PrefetchPackage,
+                    new PrefetchPackageResponse(MessageResponseCode.Success));
+
+                connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(response));
+            }
+        }
+
+        [Fact]
+        public async Task OnMessageReceived_DoesNotThrowForCancelResponseAfterWaitForResponseIsCancelled()
+        {
+            using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
+            using (var cancellationTokenSource = new CancellationTokenSource())
+            using (var sentEvent = new ManualResetEventSlim(initialState: false))
+            {
+                var connection = new Mock<IConnection>(MockBehavior.Strict);
+
+                connection.SetupGet(x => x.Options)
+                    .Returns(ConnectionOptions.CreateDefault());
+
+                connection.Setup(x => x.SendAsync(It.IsNotNull<Message>(), It.IsAny<CancellationToken>()))
+                    .Callback<Message, CancellationToken>(
+                        (message, cancellationToken) =>
+                        {
+                            sentEvent.Set();
+                        })
+                    .Returns(Task.FromResult(0));
+
+                dispatcher.SetConnection(connection.Object);
+
+                var outboundRequestTask = Task.Run(() => dispatcher.DispatchRequestAsync<PrefetchPackageRequest, PrefetchPackageResponse>(
+                    MessageMethod.PrefetchPackage,
+                    new PrefetchPackageRequest(
+                        packageSourceRepository: "a",
+                        packageId: "b",
+                        packageVersion: "c"),
+                    cancellationTokenSource.Token));
+
+                sentEvent.Wait();
+
+                cancellationTokenSource.Cancel();
+
+                await Assert.ThrowsAsync<TaskCanceledException>(() => outboundRequestTask);
+
+                var response = MessageUtilities.Create(
+                    _idGenerator.Id,
+                    MessageType.Cancel,
+                    MessageMethod.PrefetchPackage);
+
+                connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(response));
+            }
+        }
+
+        [Fact]
+        public void OnMessageReceived_CancelRequestIgnoredIfNoActiveRequest()
+        {
+            using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
+            using (var handlingEvent = new ManualResetEventSlim(initialState: false))
+            using (var cancelEvent = new ManualResetEventSlim(initialState: false))
+            using (var sentEvent = new ManualResetEventSlim(initialState: false))
+            {
+                var cancellationRequest = MessageUtilities.Create(
+                    _idGenerator.Id,
+                    MessageType.Cancel,
+                    MessageMethod.PrefetchPackage);
+
+                var connection = new Mock<IConnection>(MockBehavior.Strict);
+
+                connection.SetupGet(x => x.Options)
+                    .Returns(ConnectionOptions.CreateDefault());
+
+                dispatcher.SetConnection(connection.Object);
+
+                connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(cancellationRequest));
+
+                connection.Verify();
+            }
+        }
+
+        [Fact]
+        public void OnMessageReceived_CancelRequestCancelsActiveRequest()
+        {
+            using (var dispatcher = new MessageDispatcher(new RequestHandlers(), _idGenerator))
+            using (var handlingEvent = new ManualResetEventSlim(initialState: false))
+            using (var respondingEvent = new ManualResetEventSlim(initialState: false))
+            using (var cancelEvent = new ManualResetEventSlim(initialState: false))
+            using (var sentEvent = new ManualResetEventSlim(initialState: false))
+            {
+                var requestHandler = new RequestHandler()
+                {
+                    HandleResponseAsyncFunc = (conn, message, responseHandler, cancellationToken) =>
+                    {
+                        cancellationToken.Register(() => cancelEvent.Set());
+
+                        handlingEvent.Set();
+
+                        respondingEvent.Wait(cancellationToken);
+
+                        return Task.FromResult(0);
+                    }
+                };
+
+                dispatcher.RequestHandlers.TryAdd(MessageMethod.PrefetchPackage, requestHandler);
+
+                var request = MessageUtilities.Create(
+                    _idGenerator.Id,
+                    MessageType.Request,
+                    MessageMethod.PrefetchPackage,
+                    new PrefetchPackageRequest(
+                        packageSourceRepository: "a",
+                        packageId: "b",
+                        packageVersion: "c"));
+
+                var connection = new Mock<IConnection>(MockBehavior.Strict);
+
+                connection.SetupGet(x => x.Options)
+                    .Returns(ConnectionOptions.CreateDefault());
+
+                connection.Setup(x => x.SendAsync(
+                        It.Is<Message>(
+                            m => m.RequestId == request.RequestId &&
+                            m.Type == MessageType.Cancel &&
+                            m.Method == request.Method &&
+                            m.Payload == null),
+                        It.IsAny<CancellationToken>()))
+                    .Callback<Message, CancellationToken>(
+                        (message, cancellationToken) =>
+                        {
+                            sentEvent.Set();
+                        })
+                    .Returns(Task.FromResult(0));
+
+                dispatcher.SetConnection(connection.Object);
+
+                connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(request));
+
+                handlingEvent.Wait();
+
+                var cancellationRequest = MessageUtilities.Create(
+                    _idGenerator.Id,
+                    MessageType.Cancel,
+                    MessageMethod.PrefetchPackage);
+
+                connection.Raise(x => x.MessageReceived += null, new MessageEventArgs(cancellationRequest));
+
+                cancelEvent.Wait();
+                sentEvent.Wait();
+
+                connection.Verify();
             }
         }
 
@@ -893,23 +1074,12 @@ namespace NuGet.Protocol.Plugins.Tests
         {
             public CancellationToken CancellationToken { get; internal set; }
 
-            internal Func<IConnection, Message, IResponseHandler, CancellationToken, Task> HandleCancelAsyncFunc { get; set; }
             internal Func<IConnection, Message, IResponseHandler, CancellationToken, Task> HandleResponseAsyncFunc { get; set; }
 
             internal RequestHandler()
             {
                 CancellationToken = CancellationToken.None;
-                HandleCancelAsyncFunc = (connection, request, responseHandler, cancellationToken) => throw new NotImplementedException();
                 HandleResponseAsyncFunc = (connection, request, responseHandler, cancellationToken) => throw new NotImplementedException();
-            }
-
-            public Task HandleCancelAsync(
-                IConnection connection,
-                Message request,
-                IResponseHandler responseHandler,
-                CancellationToken cancellationToken)
-            {
-                return HandleCancelAsyncFunc(connection, request, responseHandler, cancellationToken);
             }
 
             public Task HandleResponseAsync(

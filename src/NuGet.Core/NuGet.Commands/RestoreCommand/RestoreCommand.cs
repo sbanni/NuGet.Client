@@ -24,20 +24,22 @@ namespace NuGet.Commands
 {
     public class RestoreCommand
     {
-        private readonly ICollectorLogger _logger;
+        private readonly RestoreCollectorLogger _logger;
+
         private readonly RestoreRequest _request;
 
         private bool _success = true;
-        private readonly Dictionary<NuGetFramework, RuntimeGraph> _runtimeGraphCache = new Dictionary<NuGetFramework, RuntimeGraph>();
-        private readonly ConcurrentDictionary<PackageIdentity, RuntimeGraph> _runtimeGraphCacheByPackage
 
+        private readonly Dictionary<NuGetFramework, RuntimeGraph> _runtimeGraphCache = new Dictionary<NuGetFramework, RuntimeGraph>();
+
+        private readonly ConcurrentDictionary<PackageIdentity, RuntimeGraph> _runtimeGraphCacheByPackage
             = new ConcurrentDictionary<PackageIdentity, RuntimeGraph>(PackageIdentity.Comparer);
+
         private readonly Dictionary<RestoreTargetGraph, Dictionary<string, LibraryIncludeFlags>> _includeFlagGraphs
             = new Dictionary<RestoreTargetGraph, Dictionary<string, LibraryIncludeFlags>>();
 
         public RestoreCommand(RestoreRequest request)
         {
-
             _request = request ?? throw new ArgumentNullException(nameof(request));
 
             // Validate the lock file version requested
@@ -47,7 +49,18 @@ namespace NuGet.Commands
                 throw new ArgumentOutOfRangeException(nameof(_request.LockFileVersion));
             }
 
-            var collectorLogger = new CollectorLogger(_request.Log, request.HideWarningsAndErrors);
+            var collectorLoggerHideWarningsAndErrors = request.Project.RestoreSettings.HideWarningsAndErrors
+                || request.HideWarningsAndErrors;
+
+            var collectorLogger = new RestoreCollectorLogger(_request.Log, collectorLoggerHideWarningsAndErrors)
+            {
+                WarningPropertiesCollection =  new WarningPropertiesCollection()
+                {
+                    ProjectWideWarningProperties = request.Project?.RestoreMetadata?.ProjectWideWarningProperties,
+                    PackageSpecificWarningProperties = WarningPropertiesCollection.GetPackageSpecificWarningProperties(request.Project)
+                }
+            };
+
             _logger = collectorLogger;
         }
 
@@ -67,8 +80,31 @@ namespace NuGet.Commands
             };
 
             localRepositories.AddRange(_request.DependencyProviders.FallbackPackageFolders);
-
+            
             var contextForProject = CreateRemoteWalkContext(_request, _logger);
+
+            CacheFile cacheFile = null;
+            if (NoOpRestoreUtilities.IsNoOpSupported(_request)) {
+                var cacheFileAndStatus = EvaluateCacheFile();
+                cacheFile = cacheFileAndStatus.Key;
+                if (cacheFileAndStatus.Value)
+                {
+                    if (NoOpRestoreUtilities.VerifyAssetsAndMSBuildFilesAndPackagesArePresent(_request))
+                    {
+                        restoreTime.Stop();
+
+                        return new NoOpRestoreResult(
+                            _success,
+                            _request.ExistingLockFile,
+                            _request.ExistingLockFile,
+                            _request.ExistingLockFile.Path,
+                            cacheFile,
+                            _request.Project.RestoreMetadata.CacheFilePath,
+                            _request.ProjectStyle,
+                            restoreTime.Elapsed);
+                    }
+                }
+            }
 
             // Restore
             var graphs = await ExecuteRestoreAsync(
@@ -105,6 +141,8 @@ namespace NuGet.Commands
 
             // Determine the lock file output path
             var assetsFilePath = GetAssetsFilePath(assetsFile);
+            // Determine the cache file output path
+            var cacheFilePath = NoOpRestoreUtilities.GetCacheFilePath(_request);
 
             // Tool restores are unique since the output path is not known until after restore
             if (_request.LockFilePath == null
@@ -136,15 +174,20 @@ namespace NuGet.Commands
             await FixCaseForLegacyReaders(graphs, assetsFile, token);
 
             // Write the logs into the assets file
-            var logs = (_logger as CollectorLogger).Errors
+            var logs = _logger.Errors
                 .Select(l => AssetsLogMessage.Create(l))
                 .ToList();
 
+            _success &= !logs.Any(l => l.Level == LogLevel.Error);
+
             assetsFile.LogMessages = logs;
 
+            if (cacheFile != null)
+            {
+                cacheFile.Success = _success;
+            }
 
             restoreTime.Stop();
-
             // Create result
             return new RestoreResult(
                 _success,
@@ -154,8 +197,39 @@ namespace NuGet.Commands
                 assetsFile,
                 _request.ExistingLockFile,
                 assetsFilePath,
+                cacheFile,
+                cacheFilePath,
                 _request.ProjectStyle,
                 restoreTime.Elapsed);
+        }
+
+        private KeyValuePair<CacheFile,bool> EvaluateCacheFile()
+        {
+            CacheFile cacheFile;
+            var newDgSpecHash = _request.DependencyGraphSpec.GetHash();
+            var noOp = false;
+            if (_request.AllowNoOp && File.Exists(_request.Project.RestoreMetadata.CacheFilePath))
+            {
+                cacheFile = CacheFileFormat.Load(_request.Project.RestoreMetadata.CacheFilePath, _logger);
+
+                if (cacheFile.IsValid && StringComparer.Ordinal.Equals(cacheFile.DgSpecHash, newDgSpecHash))
+                {
+                    _logger.LogVerbose(string.Format(CultureInfo.CurrentCulture, Strings.Log_RestoreNoOpFinish, _request.Project.Name));
+                    _success = true;
+                    noOp = true;
+                }
+                else
+                {
+                    cacheFile = new CacheFile(newDgSpecHash);
+                    _logger.LogVerbose(string.Format(CultureInfo.CurrentCulture, Strings.Log_RestoreNoOpDGChanged, _request.Project.Name));
+                }
+            }
+            else
+            {
+                cacheFile = new CacheFile(newDgSpecHash);
+
+            }
+            return new KeyValuePair<CacheFile,bool>(cacheFile, noOp) ;
         }
 
         private string GetAssetsFilePath(LockFile lockFile)
@@ -282,7 +356,7 @@ namespace NuGet.Commands
                 foreach (var cycle in graph.AnalyzeResult.Cycles)
                 {
                     var text = Strings.Log_CycleDetected + $" {Environment.NewLine}  {cycle.GetPath()}.";
-                    await logger.LogAsync(RestoreLogMessage.CreateError(NuGetLogCode.NU1606, text, cycle.Key?.Name, graph.Name));
+                    await logger.LogAsync(RestoreLogMessage.CreateError(NuGetLogCode.NU1606, text, cycle.Key?.Name, graph.TargetGraphName));
                     return false;
                 }
             }
@@ -305,7 +379,7 @@ namespace NuGet.Commands
                             versionConflict.Selected.Key.Name)
                         + $" {Environment.NewLine} {versionConflict.Selected.GetPath()} {Environment.NewLine} {versionConflict.Conflicting.GetPath()}.";
 
-                    await logger.LogAsync(RestoreLogMessage.CreateError(NuGetLogCode.NU1607, message, versionConflict.Selected.Key.Name, graph.Name));
+                    await logger.LogAsync(RestoreLogMessage.CreateError(NuGetLogCode.NU1607, message, versionConflict.Selected.Key.Name, graph.TargetGraphName));
                     return false;
                 }
             }
@@ -350,7 +424,7 @@ namespace NuGet.Commands
                                     toVersion)
                                 + $" {Environment.NewLine} {downgraded.GetPath()} {Environment.NewLine} {downgradedBy.GetPath()}";
 
-                            messages.Add(RestoreLogMessage.CreateWarning(NuGetLogCode.NU1605, message, downgraded.Key.Name, graph.Name));
+                            messages.Add(RestoreLogMessage.CreateWarning(NuGetLogCode.NU1605, message, downgraded.Key.Name, graph.TargetGraphName));
                         }
                     }
                 }
@@ -628,7 +702,7 @@ namespace NuGet.Commands
             return projectFrameworkRuntimePairs;
         }
 
-        private static RemoteWalkContext CreateRemoteWalkContext(RestoreRequest request, ICollectorLogger logger)
+        private static RemoteWalkContext CreateRemoteWalkContext(RestoreRequest request, RestoreCollectorLogger logger)
         {
             var context = new RemoteWalkContext(
                 request.CacheContext,

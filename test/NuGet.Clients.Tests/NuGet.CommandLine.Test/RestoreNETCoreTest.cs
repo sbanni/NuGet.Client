@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using FluentAssertions;
 using Newtonsoft.Json.Linq;
 using NuGet.Frameworks;
 using NuGet.Packaging;
@@ -3412,6 +3413,247 @@ namespace NuGet.CommandLine.Test
 
                 // Assert
                 Assert.Equal("packagex/1.0.0-beta", xLibrary.Path);
+            }
+        }
+
+        [Fact]
+        public async Task RestoreNetCore_AssetTargetFallbackVerifyFallbackToNet46Assets()
+        {
+            // Arrange
+            using (var pathContext = new SimpleTestPathContext())
+            {
+                // Set up solution, project, and packages
+                var solution = new SimpleTestSolutionContext(pathContext.SolutionRoot);
+
+                var netcoreapp2 = NuGetFramework.Parse("netcoreapp2.0");
+
+                var projectA = SimpleTestProjectContext.CreateNETCore(
+                    "a",
+                    pathContext.SolutionRoot,
+                    netcoreapp2);
+                projectA.Properties.Add("AssetTargetFallback", "net461");
+
+                var packageX = new SimpleTestPackageContext()
+                {
+                    Id = "x",
+                    Version = "1.0.0"
+                };
+                packageX.Files.Clear();
+                packageX.AddFile("lib/net45/a.dll");
+
+                projectA.AddPackageToAllFrameworks(packageX);
+
+                solution.Projects.Add(projectA);
+                solution.Create(pathContext.SolutionRoot);
+
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    pathContext.PackageSource,
+                    PackageSaveMode.Defaultv3,
+                    packageX);
+
+                // Act
+                var r = Util.RestoreSolution(pathContext);
+                var graph = projectA.AssetsFile.GetTarget(netcoreapp2, runtimeIdentifier: null);
+                var lib = graph.GetTargetLibrary("x");
+
+                // Assert
+                lib.CompileTimeAssemblies.Select(e => e.Path)
+                    .ShouldBeEquivalentTo(new[] { "lib/net45/a.dll" },
+                    "no compatible assets were found for ns2.0");
+
+                r.AllOutput.Should().Contain("This may cause compatibility problems");
+            }
+        }
+
+        [Fact]
+        public async Task RestoreNetCore_AssetTargetFallbackVerifyNoFallbackToNet46Assets()
+        {
+            // Arrange
+            using (var pathContext = new SimpleTestPathContext())
+            {
+                // Set up solution, project, and packages
+                var solution = new SimpleTestSolutionContext(pathContext.SolutionRoot);
+
+                var netcoreapp2 = NuGetFramework.Parse("netcoreapp2.0");
+
+                var projectA = SimpleTestProjectContext.CreateNETCore(
+                    "a",
+                    pathContext.SolutionRoot,
+                    netcoreapp2);
+                projectA.Properties.Add("AssetTargetFallback", "net461");
+                projectA.Properties.Add("RuntimeIdentifiers", "win10");
+
+                var packageX = new SimpleTestPackageContext()
+                {
+                    Id = "x",
+                    Version = "1.0.0"
+                };
+                packageX.Files.Clear();
+                packageX.AddFile("lib/net461/a.dll");
+                packageX.AddFile("ref/netstandard1.0/a.dll");
+                packageX.AddFile("ref/net461/a.dll");
+                packageX.AddFile("runtimes/win10/native/a.dll");
+                packageX.AddFile("runtimes/win10/lib/net461/a.dll");
+                packageX.AddFile("build/net461/x.targets");
+                packageX.AddFile("buildMultiTargeting/net461/x.targets");
+                packageX.AddFile("contentFiles/any/net461/a.txt");
+
+                projectA.AddPackageToAllFrameworks(packageX);
+
+                solution.Projects.Add(projectA);
+                solution.Create(pathContext.SolutionRoot);
+
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    pathContext.PackageSource,
+                    PackageSaveMode.Defaultv3,
+                    packageX);
+
+                // Act
+                var r = Util.RestoreSolution(pathContext);
+
+                // Assert
+                foreach (var graph in projectA.AssetsFile.Targets)
+                {
+                    var lib = graph.GetTargetLibrary("x");
+
+                    lib.CompileTimeAssemblies.Select(e => e.Path)
+                        .ShouldBeEquivalentTo(new[] { "ref/netstandard1.0/a.dll" },
+                        "ATF does not fallback to lib/net45 if other assets were found.");
+
+                    lib.RuntimeAssemblies.Should().BeEmpty();
+                    lib.BuildMultiTargeting.Should().BeEmpty();
+                    lib.Build.Should().BeEmpty();
+                    lib.ContentFiles.Should().BeEmpty();
+                    lib.ResourceAssemblies.Should().BeEmpty();
+                    // Native will contain a.dll for RID targets
+                }
+            }
+        }
+
+        [Fact]
+        public async Task RestoreNetCore_BothAssetTargetFallbackPackageTargetFallbackVerifyError()
+        {
+            // Arrange
+            using (var pathContext = new SimpleTestPathContext())
+            {
+                // Set up solution, project, and packages
+                var solution = new SimpleTestSolutionContext(pathContext.SolutionRoot);
+
+                var netcoreapp2 = NuGetFramework.Parse("netcoreapp2.0");
+
+                var projectA = SimpleTestProjectContext.CreateNETCore(
+                    "a",
+                    pathContext.SolutionRoot,
+                    netcoreapp2);
+                projectA.Properties.Add("AssetTargetFallback", "net461");
+                projectA.Properties.Add("PackageTargetFallback", "dnxcore50");
+
+                var packageX = new SimpleTestPackageContext()
+                {
+                    Id = "x",
+                    Version = "1.0.0"
+                };
+
+                projectA.AddPackageToAllFrameworks(packageX);
+
+                solution.Projects.Add(projectA);
+                solution.Create(pathContext.SolutionRoot);
+
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    pathContext.PackageSource,
+                    PackageSaveMode.Defaultv3,
+                    packageX);
+
+                // Act
+                var r = Util.RestoreSolution(pathContext, expectedExitCode: 1);
+
+                // Assert
+                r.AllOutput.Should().Contain("PackageTargetFallback and AssetTargetFallback cannot be used together.");
+            }
+        }
+
+        [Fact]
+        public async Task RestoreNetCore_VerifyAdditionalSourcesApplied()
+        {
+            // Arrange
+            using (var extraSource = TestDirectory.Create())
+            using (var extraFallback = TestDirectory.Create())
+            using (var pathContext = new SimpleTestPathContext())
+            {
+                // Set up solution, project, and packages
+                var solution = new SimpleTestSolutionContext(pathContext.SolutionRoot);
+
+                var netcoreapp2 = NuGetFramework.Parse("netcoreapp2.0");
+
+                var projectA = SimpleTestProjectContext.CreateNETCore(
+                    "a",
+                    pathContext.SolutionRoot,
+                    netcoreapp2);
+
+                projectA.Properties.Add("RestoreAdditionalProjectSources", extraSource.Path);
+                projectA.Properties.Add("RestoreAdditionalProjectFallbackFolders", extraFallback.Path);
+
+                var packageM = new SimpleTestPackageContext()
+                {
+                    Id = "m",
+                    Version = "1.0.0"
+                };
+
+                var packageX = new SimpleTestPackageContext()
+                {
+                    Id = "x",
+                    Version = "1.0.0"
+                };
+
+                var packageY = new SimpleTestPackageContext()
+                {
+                    Id = "y",
+                    Version = "1.0.0"
+                };
+
+                var packageZ = new SimpleTestPackageContext()
+                {
+                    Id = "z",
+                    Version = "1.0.0"
+                };
+
+                projectA.AddPackageToAllFrameworks(packageM);
+                projectA.AddPackageToAllFrameworks(packageX);
+                projectA.AddPackageToAllFrameworks(packageY);
+                projectA.AddPackageToAllFrameworks(packageZ);
+
+                solution.Projects.Add(projectA);
+                solution.Create(pathContext.SolutionRoot);
+
+                // M is only in the fallback folder
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    pathContext.FallbackFolder,
+                    PackageSaveMode.Defaultv3,
+                    packageM);
+
+                // X is only in the source
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    pathContext.PackageSource,
+                    PackageSaveMode.Defaultv3,
+                    packageX);
+
+                // Y is only in the extra source
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    extraSource,
+                    PackageSaveMode.Defaultv3,
+                    packageY);
+
+                // Z is only in the extra fallback
+                await SimpleTestPackageUtility.CreateFolderFeedV3(
+                    extraFallback,
+                    PackageSaveMode.Defaultv3,
+                    packageZ);
+
+                // Act
+                var r = Util.RestoreSolution(pathContext);
+
+                // Assert
+                projectA.AssetsFile.Libraries.Select(e => e.Name).OrderBy(e => e).ShouldBeEquivalentTo(new[] { "m", "x", "y", "z" });
             }
         }
     }

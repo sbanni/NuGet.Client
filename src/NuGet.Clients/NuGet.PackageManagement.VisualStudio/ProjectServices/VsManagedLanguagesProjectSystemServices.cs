@@ -204,6 +204,14 @@ namespace NuGet.PackageManagement.VisualStudio
                 GetReferenceMetadataValue(reference, ProjectItemProperties.ExcludeAssets),
                 GetReferenceMetadataValue(reference, ProjectItemProperties.PrivateAssets));
 
+            dependency.AutoReferenced = MSBuildStringUtility.IsTrue(GetReferenceMetadataValue(reference, ProjectItemProperties.IsImplicitlyDefined));
+
+            // Add warning suppressions
+            foreach (var code in MSBuildRestoreUtility.GetNuGetLogCodes(GetReferenceMetadataValue(reference, ProjectItemProperties.NoWarn)))
+            {
+                dependency.NoWarn.Add(code);
+            }
+
             return dependency;
         }
 
@@ -270,11 +278,11 @@ namespace NuGet.PackageManagement.VisualStudio
                 metadataValues);
         }
 
-        public void RemovePackageReference(string packageName)
+        public async Task RemovePackageReferenceAsync(string packageName)
         {
             Assumes.NotNullOrEmpty(packageName);
 
-            _threadingService.ThrowIfNotOnUIThread();
+            await _threadingService.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             AsVSProject4.PackageReferences.Remove(packageName);
         }

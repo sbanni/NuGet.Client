@@ -49,6 +49,51 @@ namespace NuGet.PackageManagement.VisualStudio
             }
         }
 
+        public string RestorePackagesPath
+        {
+            get
+            {
+                var restorePackagesPath = BuildProperties.GetPropertyValue(ProjectBuildProperties.RestorePackagesPath);
+
+                if (string.IsNullOrWhiteSpace(restorePackagesPath))
+                {
+                    return null;
+                }
+
+                return restorePackagesPath;
+            }
+        }
+
+        public string RestoreSources
+        {
+            get
+            {
+                var restoreSources = BuildProperties.GetPropertyValue(ProjectBuildProperties.RestoreSources);
+
+                if (string.IsNullOrWhiteSpace(restoreSources))
+                {
+                    return null;
+                }
+
+                return restoreSources;
+            }
+        }
+
+        public string RestoreFallbackFolders
+        {
+            get
+            {
+                var restoreFallbackFolders = BuildProperties.GetPropertyValue(ProjectBuildProperties.RestoreFallbackFolders);
+
+                if (string.IsNullOrWhiteSpace(restoreFallbackFolders))
+                {
+                    return null;
+                }
+
+                return restoreFallbackFolders;
+            }
+        }
+
         public IProjectBuildProperties BuildProperties { get; private set; }
 
         public string CustomUniqueName => ProjectNames.CustomUniqueName;
@@ -116,6 +161,14 @@ namespace NuGet.PackageManagement.VisualStudio
             }
         }
 
+        public string AssetTargetFallback
+        {
+            get
+            {
+                return BuildProperties.GetPropertyValue(ProjectBuildProperties.AssetTargetFallback);
+            }
+        }
+
         public EnvDTE.Project Project => _dteProject.Value;
 
         public string ProjectId
@@ -177,7 +230,17 @@ namespace NuGet.PackageManagement.VisualStudio
 
         public IVsHierarchy VsHierarchy => _vsHierarchyItem.VsHierarchy;
 
-#endregion Properties
+        public string RestoreAdditionalProjectSources => BuildProperties.GetPropertyValue(ProjectBuildProperties.AssetTargetFallback);
+
+        public string RestoreAdditionalProjectFallbackFolders => BuildProperties.GetPropertyValue(ProjectBuildProperties.RestoreAdditionalProjectFallbackFolders);
+
+        public string NoWarn => BuildProperties.GetPropertyValue(ProjectBuildProperties.NoWarn);
+
+        public string WarningsAsErrors => BuildProperties.GetPropertyValue(ProjectBuildProperties.WarningsAsErrors);
+
+        public string TreatWarningsAsErrors => BuildProperties.GetPropertyValue(ProjectBuildProperties.TreatWarningsAsErrors);
+
+        #endregion Properties
 
         #region Constructors
 

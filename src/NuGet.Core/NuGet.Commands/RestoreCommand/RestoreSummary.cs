@@ -16,6 +16,8 @@ namespace NuGet.Commands
     {
         public bool Success { get; }
 
+        public bool NoOpRestore { get; }
+
         public string InputPath { get; }
 
         public IList<string> ConfigFiles { get; }
@@ -29,6 +31,7 @@ namespace NuGet.Commands
         public RestoreSummary(bool success)
         {
             Success = success;
+            NoOpRestore = false;
             InputPath = null;
             ConfigFiles = new List<string>().AsReadOnly();
             FeedsUsed = new List<string>().AsReadOnly();
@@ -44,6 +47,7 @@ namespace NuGet.Commands
             IEnumerable<RestoreLogMessage> errors)
         {
             Success = result.Success;
+            NoOpRestore = result is NoOpRestoreResult;
             InputPath = inputPath;
             ConfigFiles = settings
                 .Priority
@@ -87,14 +91,19 @@ namespace NuGet.Commands
                 // Display the errors summary
                 foreach (var restoreSummary in restoreSummaries)
                 {
-                    if (restoreSummary.Errors.Count == 0)
+                    var errors = restoreSummary
+                        .Errors
+                        .Where(m => m.Level == LogLevel.Error)
+                        .ToList();
+
+                    if (errors.Count == 0)
                     {
                         continue;
                     }
 
                     logger.LogError(string.Empty);
                     logger.LogError(string.Format(CultureInfo.CurrentCulture, Strings.Log_ErrorSummary, restoreSummary.InputPath));
-                    foreach (var error in restoreSummary.Errors.Where(m => m.Level == LogLevel.Error))
+                    foreach (var error in errors)
                     {
                         foreach (var line in IndentLines(error.Message))
                         {

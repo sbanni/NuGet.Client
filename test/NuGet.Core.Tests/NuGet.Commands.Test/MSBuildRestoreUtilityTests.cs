@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FluentAssertions;
+using NuGet.Common;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
 using NuGet.ProjectModel;
@@ -301,6 +303,7 @@ namespace NuGet.Commands.Test
                 var outputPath1 = Path.Combine(project1Root, "obj");
                 var fallbackFolder = Path.Combine(project1Root, "fallback");
                 var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
 
                 var items = new List<IDictionary<string, string>>();
 
@@ -317,6 +320,7 @@ namespace NuGet.Commands.Test
                     { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
                     { "FallbackFolders", fallbackFolder },
                     { "PackagesPath", packagesFolder },
+                    { "ConfigFilePaths", configFilePath },
                     { "CrossTargeting", "true" },
                     { "RestoreLegacyPackagesDirectory", "true" }
                 });
@@ -342,6 +346,7 @@ namespace NuGet.Commands.Test
                 Assert.Equal("https://nuget.org/a/index.json|https://nuget.org/b/index.json", string.Join("|", project1Spec.RestoreMetadata.Sources.Select(s => s.Source)));
                 Assert.Equal(fallbackFolder, string.Join("|", project1Spec.RestoreMetadata.FallbackFolders));
                 Assert.Equal(packagesFolder, string.Join("|", project1Spec.RestoreMetadata.PackagesPath));
+                Assert.Equal(configFilePath, string.Join("|", project1Spec.RestoreMetadata.ConfigFilePaths));
                 Assert.Equal(0, project1Spec.RuntimeGraph.Runtimes.Count);
                 Assert.Equal(0, project1Spec.RuntimeGraph.Supports.Count);
                 Assert.True(project1Spec.RestoreMetadata.CrossTargeting);
@@ -360,6 +365,7 @@ namespace NuGet.Commands.Test
                 var outputPath1 = Path.Combine(project1Root, "obj");
                 var fallbackFolder = Path.Combine(project1Root, "fallback");
                 var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
 
                 var items = new List<IDictionary<string, string>>();
 
@@ -374,6 +380,7 @@ namespace NuGet.Commands.Test
                     { "TargetFrameworks", "net46;netstandard16" },
                     { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
                     { "FallbackFolders", fallbackFolder },
+                    { "ConfigFilePaths", configFilePath },
                     { "PackagesPath", packagesFolder },
                     { "CrossTargeting", "true" },
                     { "RestoreLegacyPackagesDirectory", "true" }
@@ -401,6 +408,7 @@ namespace NuGet.Commands.Test
                 var outputPath1 = Path.Combine(project1Root, "obj");
                 var fallbackFolder = Path.Combine(project1Root, "fallback");
                 var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
 
                 var items = new List<IDictionary<string, string>>();
 
@@ -416,6 +424,7 @@ namespace NuGet.Commands.Test
                     { "TargetFrameworks", "net46;netstandard16" },
                     { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
                     { "FallbackFolders", fallbackFolder },
+                    { "ConfigFilePaths", configFilePath },
                     { "PackagesPath", packagesFolder },
                     { "CrossTargeting", "true" },
                     { "RestoreLegacyPackagesDirectory", "true" }
@@ -440,6 +449,7 @@ namespace NuGet.Commands.Test
                 var outputPath1 = Path.Combine(project1Root, "obj");
                 var fallbackFolder = Path.Combine(project1Root, "fallback");
                 var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
 
                 var items = new List<IDictionary<string, string>>();
 
@@ -455,6 +465,7 @@ namespace NuGet.Commands.Test
                     { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
                     { "FallbackFolders", fallbackFolder },
                     { "PackagesPath", packagesFolder },
+                    { "ConfigFilePaths", configFilePath },
                 });
 
                 var wrappedItems = items.Select(CreateItems).ToList();
@@ -1419,6 +1430,266 @@ namespace NuGet.Commands.Test
 
             // Verify the value was not changed when it was stored
             Assert.Equal(input, raw);
+        }
+
+        [Theory]
+        [InlineData("a", false)]
+        [InlineData("", false)]
+        [InlineData("cLear", false)]
+        [InlineData("cLear;clear", false)]
+        [InlineData("cLear;a", true)]
+        [InlineData("a;CLEAR", true)]
+        [InlineData("a;CLEAR;CLEAR", true)]
+        public void MSBuildRestoreUtility_HasInvalidClear(string input, bool expected)
+        {
+            Assert.Equal(expected, MSBuildRestoreUtility.HasInvalidClear(MSBuildStringUtility.Split(input)));
+        }
+
+        [Theory]
+        [InlineData("a", false)]
+        [InlineData("", false)]
+        [InlineData("c;lear", false)]
+        [InlineData("a;b", false)]
+        [InlineData("cLear", true)]
+        [InlineData("cLear;clear", true)]
+        [InlineData("cLear;a", true)]
+        [InlineData("a;CLEAR", true)]
+        [InlineData("a;CLEAR;CLEAR", true)]
+        public void MSBuildRestoreUtility_ContainsClearKeyword(string input, bool expected)
+        {
+            Assert.Equal(expected, MSBuildRestoreUtility.ContainsClearKeyword(MSBuildStringUtility.Split(input)));
+        }
+
+        [Fact]
+        public void MSBuildRestoreUtility_GetPackageSpec_NetCoreVerifyProjectWideWarningProperties()
+        {
+            using (var workingDir = TestDirectory.Create())
+            {
+                // Arrange
+                var project1Root = Path.Combine(workingDir, "a");
+                var project1Path = Path.Combine(project1Root, "a.csproj");
+                var outputPath1 = Path.Combine(project1Root, "obj");
+                var fallbackFolder = Path.Combine(project1Root, "fallback");
+                var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
+
+                var items = new List<IDictionary<string, string>>();
+
+                
+                items.Add(new Dictionary<string, string>()
+                {
+                    { "Type", "ProjectSpec" },
+                    { "Version", "2.0.0-rc.2+a.b.c" },
+                    { "ProjectName", "a" },
+                    { "ProjectStyle", "PackageReference" },
+                    { "OutputPath", outputPath1 },
+                    { "ProjectUniqueName", "482C20DE-DFF9-4BD0-B90A-BD3201AA351A" },
+                    { "ProjectPath", project1Path },
+                    { "TargetFrameworks", "net46" },
+                    { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
+                    { "FallbackFolders", fallbackFolder },
+                    { "PackagesPath", packagesFolder },
+                    { "ConfigFilePaths", configFilePath },
+                    { "TreatWarningsAsErrors", "true" },
+                    { "WarningsAsErrors", "NU1001;NU1002" },
+                    { "NoWarn", "NU1100;NU1101" },
+                });
+
+                var wrappedItems = items.Select(CreateItems).ToList();
+
+                // Act
+                var dgSpec = MSBuildRestoreUtility.GetDependencySpec(wrappedItems);
+                var project1Spec = dgSpec.Projects.Single();
+                var props = project1Spec.RestoreMetadata.ProjectWideWarningProperties;
+
+                // Assert
+                props.AllWarningsAsErrors.Should().BeTrue();
+                props.NoWarn.ShouldBeEquivalentTo(new[] { NuGetLogCode.NU1100, NuGetLogCode.NU1101 });
+                props.WarningsAsErrors.ShouldBeEquivalentTo(new[] { NuGetLogCode.NU1001, NuGetLogCode.NU1002 });
+            }
+        }
+
+        [Fact]
+        public void MSBuildRestoreUtility_GetPackageSpec_NetCoreVerifyEmptyProjectWideWarningProperties()
+        {
+            using (var workingDir = TestDirectory.Create())
+            {
+                // Arrange
+                var project1Root = Path.Combine(workingDir, "a");
+                var project1Path = Path.Combine(project1Root, "a.csproj");
+                var outputPath1 = Path.Combine(project1Root, "obj");
+                var fallbackFolder = Path.Combine(project1Root, "fallback");
+                var packagesFolder = Path.Combine(project1Root, "packages");
+                var configFilePath = Path.Combine(project1Root, "nuget.config");
+
+                var items = new List<IDictionary<string, string>>();
+
+                
+                items.Add(new Dictionary<string, string>()
+                {
+                    { "Type", "ProjectSpec" },
+                    { "Version", "2.0.0-rc.2+a.b.c" },
+                    { "ProjectName", "a" },
+                    { "ProjectStyle", "PackageReference" },
+                    { "OutputPath", outputPath1 },
+                    { "ProjectUniqueName", "482C20DE-DFF9-4BD0-B90A-BD3201AA351A" },
+                    { "ProjectPath", project1Path },
+                    { "TargetFrameworks", "net46" },
+                    { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
+                    { "FallbackFolders", fallbackFolder },
+                    { "PackagesPath", packagesFolder },
+                    { "ConfigFilePaths", configFilePath },
+                    { "TreatWarningsAsErrors", "" },
+                    { "WarningsAsErrors", "" },
+                    { "NoWarn", "" },
+                });
+
+                var wrappedItems = items.Select(CreateItems).ToList();
+
+                // Act
+                var dgSpec = MSBuildRestoreUtility.GetDependencySpec(wrappedItems);
+                var project1Spec = dgSpec.Projects.Single();
+                var props = project1Spec.RestoreMetadata.ProjectWideWarningProperties;
+
+                // Assert
+                props.AllWarningsAsErrors.Should().BeFalse();
+                props.NoWarn.Should().BeEmpty();
+                props.WarningsAsErrors.Should().BeEmpty();
+            }
+        }
+
+        [Fact]
+        public void MSBuildRestoreUtility_GetPackageSpec_NetCoreVerifyPackageWarningProperties()
+        {
+            using (var workingDir = TestDirectory.Create())
+            {
+                // Arrange
+                var project1Root = Path.Combine(workingDir, "a");
+                var uniqueName = "482C20DE-DFF9-4BD0-B90A-BD3201AA351A";
+
+                var items = new List<IDictionary<string, string>>();
+
+                items.Add(CreateProject(project1Root, uniqueName));
+
+                // Package references
+                items.Add(new Dictionary<string, string>()
+                {
+                    { "Type", "Dependency" },
+                    { "ProjectUniqueName", uniqueName },
+                    { "Id", "x" },
+                    { "VersionRange", "1.0.0" },
+                    { "TargetFrameworks", "net46" },
+                    { "CrossTargeting", "true" },
+                    { "NoWarn", "NU1001;NU1002" },
+                });
+
+                var wrappedItems = items.Select(CreateItems).ToList();
+
+                // Act
+                var dgSpec = MSBuildRestoreUtility.GetDependencySpec(wrappedItems);
+                var project1Spec = dgSpec.Projects.Single();
+                var packageDependency = project1Spec.TargetFrameworks[0].Dependencies[0];
+
+                // Assert
+                packageDependency.NoWarn.ShouldBeEquivalentTo(new[] { NuGetLogCode.NU1001, NuGetLogCode.NU1002 });
+            }
+        }
+
+        [Fact]
+        public void MSBuildRestoreUtility_GetPackageSpec_NetCoreVerifyEmptyPackageWarningProperties()
+        {
+            using (var workingDir = TestDirectory.Create())
+            {
+                // Arrange
+                var project1Root = Path.Combine(workingDir, "a");
+                var uniqueName = "482C20DE-DFF9-4BD0-B90A-BD3201AA351A";
+
+                var items = new List<IDictionary<string, string>>();
+
+                items.Add(CreateProject(project1Root, uniqueName));
+
+                // Package references
+                items.Add(new Dictionary<string, string>()
+                {
+                    { "Type", "Dependency" },
+                    { "ProjectUniqueName", uniqueName },
+                    { "Id", "x" },
+                    { "VersionRange", "1.0.0" },
+                    { "TargetFrameworks", "net46" },
+                    { "CrossTargeting", "true" },
+                });
+
+                var wrappedItems = items.Select(CreateItems).ToList();
+
+                // Act
+                var dgSpec = MSBuildRestoreUtility.GetDependencySpec(wrappedItems);
+                var project1Spec = dgSpec.Projects.Single();
+                var packageDependency = project1Spec.TargetFrameworks[0].Dependencies[0];
+
+                // Assert
+                packageDependency.NoWarn.Should().BeEmpty();
+            }
+        }
+
+        [Fact]
+        public void MSBuildRestoreUtility_GetPackageSpec_NetCoreVerifyAutoReferencedTrue()
+        {
+            using (var workingDir = TestDirectory.Create())
+            {
+                // Arrange
+                var project1Root = Path.Combine(workingDir, "a");
+                var uniqueName = "482C20DE-DFF9-4BD0-B90A-BD3201AA351A";
+
+                var items = new List<IDictionary<string, string>>();
+
+                items.Add(CreateProject(project1Root, uniqueName));
+
+                // Package references
+                items.Add(new Dictionary<string, string>()
+                {
+                    { "Type", "Dependency" },
+                    { "ProjectUniqueName", uniqueName },
+                    { "Id", "x" },
+                    { "VersionRange", "1.0.0" },
+                    { "TargetFrameworks", "net46" },
+                    { "IsImplicitlyDefined", "true" },
+                });
+
+                var wrappedItems = items.Select(CreateItems).ToList();
+
+                // Act
+                var dgSpec = MSBuildRestoreUtility.GetDependencySpec(wrappedItems);
+                var project1Spec = dgSpec.Projects.Single();
+                var packageDependency = project1Spec.TargetFrameworks[0].Dependencies[0];
+
+                // Assert
+                packageDependency.AutoReferenced.Should().BeTrue();
+            }
+        }
+
+        private static IDictionary<string, string> CreateProject(string root, string uniqueName)
+        {
+            var project1Path = Path.Combine(root, "a.csproj");
+            var outputPath1 = Path.Combine(root, "obj");
+            var fallbackFolder = Path.Combine(root, "fallback");
+            var packagesFolder = Path.Combine(root, "packages");
+            var configFilePath = Path.Combine(root, "nuget.config");
+
+            return new Dictionary<string, string>()
+                {
+                    { "Type", "ProjectSpec" },
+                    { "Version", "2.0.0-rc.2+a.b.c" },
+                    { "ProjectName", "a" },
+                    { "ProjectStyle", "PackageReference" },
+                    { "OutputPath", outputPath1 },
+                    { "ProjectUniqueName", uniqueName },
+                    { "ProjectPath", project1Path },
+                    { "TargetFrameworks", "net46" },
+                    { "Sources", "https://nuget.org/a/index.json;https://nuget.org/b/index.json" },
+                    { "FallbackFolders", fallbackFolder },
+                    { "PackagesPath", packagesFolder },
+                    { "ConfigFilePaths", configFilePath },
+                };
         }
 
         private IMSBuildItem CreateItems(IDictionary<string, string> properties)

@@ -1,10 +1,9 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
+// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -18,9 +17,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
 using NuGet.Frameworks;
-using NuGet.LibraryModel;
 using NuGet.ProjectManagement;
-using NuGet.ProjectModel;
 using NuGet.VisualStudio;
 using PathUtility = NuGet.Common.PathUtility;
 using Task = System.Threading.Tasks.Task;
@@ -29,9 +26,6 @@ namespace NuGet.PackageManagement.VisualStudio
 {
     public class VsMSBuildProjectSystem
         : IMSBuildProjectSystem
-        , IProjectSystemCapabilities
-        , IProjectSystemReferencesReader
-        , IProjectSystemReferencesService
         , IProjectSystemService
     {
         private const string BinDir = "bin";
@@ -145,23 +139,6 @@ namespace NuGet.PackageManagement.VisualStudio
         }
 
         public NuGetFramework TargetFramework => NuGetUIThreadHelper.JoinableTaskFactory.Run(_targetFramework.GetValueAsync);
-
-        public bool SupportsPackageReferences
-        {
-            get
-            {
-#if VS14
-                // VSProject4 doesn't apply for Dev14 so simply returns null.
-                return false;
-#else
-                return NuGetUIThreadHelper.JoinableTaskFactory.Run(async delegate
-                {
-                    await NuGetUIThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    return VsProjectAdapter.Project.Object is VSLangProj150.VSProject4;
-                });
-#endif
-            }
-        }
 
         public VsMSBuildProjectSystem(
             IVsProjectAdapter vsProjectAdapter,
@@ -611,9 +588,10 @@ namespace NuGet.PackageManagement.VisualStudio
 
         #endregion Binding Redirects Stuff
 
-        [SuppressMessage("Microsoft.VisualStudio.Threading.Analyzers", "VSTHRD010", Justification = "NuGet/Home#4833 Baseline")]
-        public virtual void BeginProcessing()
+        public virtual async Task BeginProcessingAsync()
         {
+            await NuGetUIThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
             ProjectBuildSystem?.StartBatchEdit();
         }
 
@@ -622,9 +600,10 @@ namespace NuGet.PackageManagement.VisualStudio
             // No-op, this is implemented in other project systems, like website.
         }
 
-        [SuppressMessage("Microsoft.VisualStudio.Threading.Analyzers", "VSTHRD010", Justification = "NuGet/Home#4833 Baseline")]
-        public virtual void EndProcessing()
+        public virtual async Task EndProcessingAsync()
         {
+            await NuGetUIThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
             ProjectBuildSystem?.EndBatchEdit();
         }
 
@@ -734,29 +713,6 @@ namespace NuGet.PackageManagement.VisualStudio
                 projectObj = null;
                 return references;
             }
-        }
-
-        public Task<IEnumerable<LibraryDependency>> GetPackageReferencesAsync(
-            NuGetFramework targetFramework, CancellationToken _)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task AddOrUpdatePackageReferenceAsync(
-            LibraryDependency packageReference, CancellationToken _)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void RemovePackageReference(string packageName)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<IEnumerable<ProjectRestoreReference>> GetProjectReferencesAsync(
-            Common.ILogger logger, CancellationToken _)
-        {
-            return Task.FromResult(Enumerable.Empty<ProjectRestoreReference>());
         }
 
         public async Task AddFrameworkReferenceAsync(string name, string packageId)
